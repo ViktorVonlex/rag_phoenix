@@ -1,0 +1,19 @@
+<div class="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+  <div class="text-center">
+    <h1 class="text-6xl font-bold text-gray-800 mb-4">RAG Ollama Elixir</h1>
+    <p class="text-xl text-gray-600 mb-8">Upload PDFs and ask questions using local AI</p>
+    
+    <div class="space-y-4">
+      <.link 
+        navigate={~p"/rag"} 
+        class="inline-block bg-indigo-600 text-white px-8 py-3 rounded-lg hover:bg-indigo-700 transition-colors font-medium text-lg"
+      >
+        Start Chatting 🚀
+      </.link>
+      
+      <div class="text-sm text-gray-500">
+        <p>✨ Powered by Phoenix LiveView & Ollama</p>
+      </div>
+    </div>
+  </div>
+</div>

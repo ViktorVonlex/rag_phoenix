@@ -1,0 +1,39 @@
+defmodule RagOllamaElixir.Chat do
+  @moduledoc """
+  Handles assembling context and interacting with Ollama LLM for chat.
+  """
+
+  @chat_model "hf.co/bartowski/Llama-3.2-1B-Instruct-GGUF"
+
+  # Builds the prompt and calls Ollama chat
+  def ask(client, context_chunks, user_query, opts \\ []) do
+    context =
+      context_chunks
+      |> Enum.map_join("\n", fn {chunk, _sim} -> chunk end)
+
+    prompt = """
+    You are a helpful chatbot.
+    Use only the following pieces of context to answer the question. Don't make up any new information:
+    #{context}
+    """
+
+    messages = [
+      %{role: "system", content: prompt},
+      %{role: "user", content: user_query}
+    ]
+
+    params =
+      [
+        model: @chat_model,
+        messages: messages
+      ]
+      |> Keyword.merge(opts)
+
+    Ollama.chat(client, params)
+  end
+
+  # Optionally: streaming support
+  def ask_stream(client, context_chunks, user_query, opts \\ []) do
+    ask(client, context_chunks, user_query, Keyword.put(opts, :stream, true))
+  end
+end
