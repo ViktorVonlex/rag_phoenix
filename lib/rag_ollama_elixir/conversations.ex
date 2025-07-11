@@ -154,7 +154,7 @@ defmodule RagOllamaElixir.Conversations do
           # Touch the conversation to update its updated_at timestamp
           conversation
           |> Ecto.Changeset.change()
-          |> Ecto.Changeset.put_change(:updated_at, DateTime.utc_now())
+          |> Ecto.Changeset.put_change(:updated_at, DateTime.utc_now() |> DateTime.truncate(:second))
           |> Repo.update!()
 
           message

@@ -1,0 +1,118 @@
+<div class="flex h-screen">
+  <!-- Sidebar -->
+  <div class="w-64 bg-gray-900 text-white flex flex-col">
+    <!-- Sidebar Header -->
+    <div class="p-4 border-b border-gray-700">
+      <button
+        phx-click="new_chat"
+        class="flex items-center gap-3 w-full text-left p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+      >
+        <div class="w-6 h-6">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+          </svg>
+        </div>
+        <span class="text-sm font-medium">New Chat</span>
+      </button>
+    </div>
+
+    <!-- Conversations List -->
+    <div class="flex-1 overflow-y-auto p-4">
+      <div class="space-y-2">
+        <%= for conversation <- @user_conversations do %>
+          <.link
+            href={~p"/rag/#{conversation.id}"}
+            class={[
+              "block w-full text-left p-3 rounded-lg text-sm transition-colors group",
+              if(@conversation && @conversation.id == conversation.id, 
+                do: "bg-white/20 text-white", 
+                else: "hover:bg-white/10 text-gray-300")
+            ]}
+          >
+            <div class="flex items-center justify-between">
+              <div class="flex-1 min-w-0">
+                <div class="font-medium truncate">{conversation.title}</div>
+                <%= if conversation.document_name do %>
+                  <div class="text-xs text-gray-400 truncate mt-1">
+                    📄 {conversation.document_name}
+                  </div>
+                <% end %>
+                <div class="text-xs text-gray-500 mt-1">
+                  {format_date(conversation.updated_at)}
+                </div>
+              </div>
+              <%= if @conversation && @conversation.id == conversation.id do %>
+                <button 
+                  phx-click="delete_conversation" 
+                  phx-value-id={conversation.id}
+                  class="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-500/20 transition-all"
+                  onclick="return confirm('Are you sure you want to delete this conversation?')"
+                >
+                  <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                  </svg>
+                </button>
+              <% end %>
+            </div>
+          </.link>
+        <% end %>
+        
+        <%= if Enum.empty?(@user_conversations) do %>
+          <div class="text-gray-400 text-sm text-center py-8">
+            No conversations yet.<br>
+            Start by uploading a document!
+          </div>
+        <% end %>
+      </div>
+    </div>
+
+    <!-- Sidebar Footer -->
+    <div class="border-t border-gray-700 p-4">
+      <div class="text-xs text-gray-400">
+        Logged in as<br>
+        <span class="text-white">{@current_user.email}</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="flex-1 flex flex-col min-w-0">
+    <!-- Header -->
+    <header class="bg-white border-b border-gray-200 px-6 py-4">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-4">
+          <img src={~p"/images/logo.svg"} width="32" />
+          <h1 class="text-lg font-semibold text-gray-900">
+            <%= if @conversation do %>
+              {String.slice(@conversation.title, 0, 50)}<%= if String.length(@conversation.title) > 50, do: "..." %>
+            <% else %>
+              RAG Chat with Ollama
+            <% end %>
+          </h1>
+        </div>
+        
+        <div class="flex items-center gap-4">
+          <.link
+            href={~p"/users/settings"}
+            class="text-sm text-gray-600 hover:text-gray-900"
+          >
+            Settings
+          </.link>
+          <.link
+            href={~p"/users/log_out"}
+            method="delete"
+            class="text-sm text-gray-600 hover:text-gray-900"
+          >
+            Log out
+          </.link>
+        </div>
+      </div>
+    </header>
+
+    <!-- Chat Content -->
+    <main class="flex-1 overflow-hidden">
+      <.flash_group flash={@flash} />
+      {@inner_content}
+    </main>
+  </div>
+</div>

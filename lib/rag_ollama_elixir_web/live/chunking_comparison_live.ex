@@ -111,7 +111,7 @@ defmodule RagOllamaElixirWeb.ChunkingComparisonLive do
           basic_chunks = Chunker.chunk(text)
 
           semantic_chunks = case SemanticChunker.chunk(text, client) do
-            chunks when is_list(chunks) -> chunks
+            {:ok, chunks} -> chunks
             {:error, _} -> ["Error: Semantic chunking failed"]
           end
 

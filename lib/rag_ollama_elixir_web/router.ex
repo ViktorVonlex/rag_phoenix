@@ -65,9 +65,14 @@ defmodule RagOllamaElixirWeb.Router do
     pipe_through [:browser, :require_authenticated_user]
 
     live_session :require_authenticated_user,
-      on_mount: [{RagOllamaElixirWeb.UserAuth, :ensure_authenticated}] do
+      on_mount: [{RagOllamaElixirWeb.UserAuth, :ensure_authenticated}],
+      layout: {RagOllamaElixirWeb.Layouts, :chat} do
       live "/rag", RagLive, :index
       live "/rag/:conversation_id", RagLive, :conversation
+    end
+
+    live_session :require_authenticated_user_app,
+      on_mount: [{RagOllamaElixirWeb.UserAuth, :ensure_authenticated}] do
       live "/chunking-comparison", ChunkingComparisonLive, :index
       live "/users/settings", UserSettingsLive, :edit
       live "/users/settings/confirm_email/:token", UserSettingsLive, :confirm_email

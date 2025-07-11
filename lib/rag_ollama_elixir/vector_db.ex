@@ -18,16 +18,24 @@ defmodule RagOllamaElixir.VectorDB do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  def add_documents(chunks_and_embeddings) do
-    GenServer.call(__MODULE__, {:add_documents, chunks_and_embeddings})
+  def add_documents(chunks_and_embeddings, conversation_id \\ nil) do
+    GenServer.call(__MODULE__, {:add_documents, chunks_and_embeddings, conversation_id})
   end
 
-  def search(query_embedding, top_k \\ 5) do
-    GenServer.call(__MODULE__, {:search, query_embedding, top_k})
+  def store(text, embedding, conversation_id \\ nil) do
+    add_documents([{text, embedding}], conversation_id)
   end
 
-  def clear() do
-    GenServer.call(__MODULE__, :clear)
+  def search(query_embedding, top_k \\ 5, conversation_id \\ nil) do
+    GenServer.call(__MODULE__, {:search, query_embedding, top_k, conversation_id})
+  end
+
+  def clear(conversation_id \\ nil) do
+    GenServer.call(__MODULE__, {:clear, conversation_id})
+  end
+
+  def load_conversation(conversation_id) do
+    GenServer.call(__MODULE__, {:load_conversation, conversation_id})
   end
 
   def stats() do
@@ -63,14 +71,15 @@ defmodule RagOllamaElixir.VectorDB do
   end
 
   @impl true
-  def handle_call({:add_documents, chunks_and_embeddings}, _from, state) do
+  def handle_call({:add_documents, chunks_and_embeddings, conversation_id}, _from, state) do
     {new_state, ids} = Enum.reduce(chunks_and_embeddings, {state, []}, fn {chunk, embedding}, {acc_state, acc_ids} ->
       id = acc_state.next_id
       new_vectors = Map.put(acc_state.vectors, id, embedding)
       new_metadata = Map.put(acc_state.metadata, id, %{
         chunk: chunk,
         timestamp: DateTime.utc_now(),
-        length: String.length(chunk)
+        length: String.length(chunk),
+        conversation_id: conversation_id
       })
 
       new_state = %{acc_state |
@@ -86,8 +95,20 @@ defmodule RagOllamaElixir.VectorDB do
   end
 
   @impl true
-  def handle_call({:search, query_embedding, top_k}, _from, state) do
-    results = state.vectors
+  def handle_call({:search, query_embedding, top_k, conversation_id}, _from, state) do
+    # Filter by conversation_id if provided
+    vectors_to_search = case conversation_id do
+      nil -> state.vectors
+      conv_id ->
+        state.vectors
+        |> Enum.filter(fn {id, _embedding} ->
+          metadata = Map.get(state.metadata, id)
+          metadata && Map.get(metadata, :conversation_id) == conv_id
+        end)
+        |> Map.new()
+    end
+
+    results = vectors_to_search
     |> Enum.map(fn {id, embedding} ->
       similarity = cosine_similarity(query_embedding, embedding)
       metadata = Map.get(state.metadata, id)
@@ -98,6 +119,44 @@ defmodule RagOllamaElixir.VectorDB do
     |> Enum.map(fn {_id, similarity, chunk} -> {chunk, similarity} end)
 
     {:reply, {:ok, results}, state}
+  end
+
+  @impl true
+  def handle_call({:clear, conversation_id}, _from, state) when conversation_id != nil do
+    # Clear only vectors for a specific conversation
+    filtered_vectors = state.vectors
+    |> Enum.reject(fn {id, _embedding} ->
+      metadata = Map.get(state.metadata, id)
+      metadata && Map.get(metadata, :conversation_id) == conversation_id
+    end)
+    |> Map.new()
+
+    filtered_metadata = state.metadata
+    |> Enum.reject(fn {_id, metadata} ->
+      metadata && Map.get(metadata, :conversation_id) == conversation_id
+    end)
+    |> Map.new()
+
+    new_state = %{state | vectors: filtered_vectors, metadata: filtered_metadata}
+    {:reply, :ok, new_state}
+  end
+
+  @impl true
+  def handle_call({:clear, nil}, _from, _state) do
+    # Clear all vectors
+    new_state = %__MODULE__{}
+    {:reply, :ok, new_state}
+  end
+
+  @impl true
+  def handle_call({:load_conversation, conversation_id}, _from, state) do
+    # Check if conversation has any vectors
+    has_vectors = state.metadata
+    |> Enum.any?(fn {_id, metadata} ->
+      metadata && Map.get(metadata, :conversation_id) == conversation_id
+    end)
+
+    {:reply, {:ok, has_vectors}, state}
   end
 
   @impl true

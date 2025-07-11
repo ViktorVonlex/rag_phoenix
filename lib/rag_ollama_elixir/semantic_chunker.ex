@@ -13,34 +13,41 @@ defmodule RagOllamaElixir.SemanticChunker do
 
   # Public entry point
   def chunk(text, client, opts \\ []) do
-    threshold = Keyword.get(opts, :threshold, @default_threshold)
-    min_chunk_size = Keyword.get(opts, :min_chunk_size, @default_min_chunk_size)
+    try do
+      threshold = Keyword.get(opts, :threshold, @default_threshold)
+      min_chunk_size = Keyword.get(opts, :min_chunk_size, @default_min_chunk_size)
 
-    # 1. Split to sentences (handles . ! ? and also \n)
-    sentences =
-      text
-      |> String.split(~r/(?<=[.?!])\s+|\n+/)
-      |> Enum.map(&String.trim/1)
-      |> Enum.filter(&(&1 != ""))
+      # 1. Split to sentences (handles . ! ? and also \n)
+      sentences =
+        text
+        |> String.split(~r/(?<=[.?!])\s+|\n+/)
+        |> Enum.map(&String.trim/1)
+        |> Enum.filter(&(&1 != ""))
 
-    # Handle edge case: if only one sentence, return it
-    if length(sentences) <= 1 do
-      sentences
-    else
-      # 2. Embed all sentences
-      case RagOllamaElixir.Embedder.embed(client, sentences) do
-        {:ok, sentence_embeddings} ->
-          # 3. Semantic chunking
-          semantic_chunks =
-            do_semantic_chunking(sentences, sentence_embeddings, threshold)
+      # Handle edge case: if only one sentence, return it
+      if length(sentences) <= 1 do
+        {:ok, sentences}
+      else
+        # 2. Embed all sentences
+        case RagOllamaElixir.Embedder.embed(client, sentences) do
+          {:ok, sentence_embeddings} ->
+            # 3. Semantic chunking
+            semantic_chunks =
+              do_semantic_chunking(sentences, sentence_embeddings, threshold)
 
-          # 4. Merge small chunks (optional)
-          merge_small_chunks(semantic_chunks, min_chunk_size)
+            # 4. Merge small chunks (optional)
+            final_chunks = merge_small_chunks(semantic_chunks, min_chunk_size)
+            {:ok, final_chunks}
 
-        {:error, _reason} ->
-          # Fallback to simple chunking if embedding fails
-          fallback_chunking(text, min_chunk_size)
+          {:error, _reason} ->
+            # Fallback to simple chunking if embedding fails
+            fallback_chunks = fallback_chunking(text, min_chunk_size)
+            {:ok, fallback_chunks}
+        end
       end
+    rescue
+      error ->
+        {:error, "Semantic chunking failed: #{inspect(error)}"}
     end
   end
 

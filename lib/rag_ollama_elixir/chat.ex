@@ -32,8 +32,8 @@ defmodule RagOllamaElixir.Chat do
     Ollama.chat(client, params)
   end
 
-  # Optionally: streaming support
-  def ask_stream(client, context_chunks, user_query, opts \\ []) do
-    ask(client, context_chunks, user_query, Keyword.put(opts, :stream, true))
+  # Streaming support - pass the PID to stream to
+  def ask_stream(client, context_chunks, user_query, stream_pid, opts \\ []) do
+    ask(client, context_chunks, user_query, Keyword.put(opts, :stream, stream_pid))
   end
 end
