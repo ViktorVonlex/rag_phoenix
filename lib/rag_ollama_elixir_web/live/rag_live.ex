@@ -18,12 +18,12 @@ defmodule RagOllamaElixirWeb.RagLive do
       |> assign(:ollama_client, nil)
       |> assign(:uploaded_file, nil)
       |> assign(:chunking_strategy, :semantic)  # :semantic or :basic
+      |> assign(:streaming_message, nil)  # For streaming responses
       |> allow_upload(:pdf,
           accept: ~w(.pdf),
           max_entries: 1,
           max_file_size: 50_000_000)
 
-    # Initialize Ollama client
     client = Ollama.init()
     {:ok, assign(socket, :ollama_client, client)}
   end
@@ -54,7 +54,7 @@ defmodule RagOllamaElixirWeb.RagLive do
           |> assign(:messages, [])
           |> assign(:vector_db, [])
 
-        # Process in background task
+        # Process upload
         IO.puts("=== Starting background task for file processing ===")
         live_view_pid = self()
         Task.start(fn ->
@@ -74,11 +74,19 @@ defmodule RagOllamaElixirWeb.RagLive do
       # Add user message
       user_message = %{role: :user, content: question, timestamp: DateTime.utc_now()}
       messages = socket.assigns.messages ++ [user_message]
-      socket = assign(socket, :messages, messages)
+
+      # Start streaming assistant message
+      assistant_message = %{role: :assistant, content: "", timestamp: DateTime.utc_now(), streaming: true}
+      messages = messages ++ [assistant_message]
+
+      socket =
+        socket
+        |> assign(:messages, messages)
+        |> assign(:streaming_message, assistant_message)
 
       live_view_pid = self()
       Task.start(fn ->
-        send(live_view_pid, {:process_question, question})
+        send(live_view_pid, {:process_question_stream, question})
       end)
 
       {:noreply, assign(socket, :current_question, "")}
@@ -158,6 +166,74 @@ defmodule RagOllamaElixirWeb.RagLive do
     end
   end
 
+  def handle_info({:process_question_stream, question}, socket) do
+    IO.puts("=== HANDLE_INFO: Processing question stream: #{question} ===")
+    case answer_question_stream(question, socket.assigns.vector_db, socket.assigns.ollama_client, self()) do
+      {:ok, :started} ->
+        # Streaming started successfully, messages will come via handle_info
+        {:noreply, socket}
+      {:error, reason} ->
+        IO.puts("=== Question processing failed: #{inspect(reason)} ===")
+        socket =
+          socket
+          |> assign(:processing, false)
+          |> assign(:streaming_message, nil)
+          |> put_flash(:error, "Failed to get answer: #{reason}")
+
+        {:noreply, socket}
+    end
+  end
+
+  def handle_info({:stream_chunk, chunk}, socket) do
+    # Update the streaming message with new content
+    if socket.assigns.streaming_message do
+      updated_content = socket.assigns.streaming_message.content <> chunk
+      updated_message = %{socket.assigns.streaming_message | content: updated_content}
+
+      # Update the last message in the messages list
+      messages = List.update_at(socket.assigns.messages, -1, fn _ -> updated_message end)
+
+      socket =
+        socket
+        |> assign(:messages, messages)
+        |> assign(:streaming_message, updated_message)
+
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({:stream_complete}, socket) do
+    # Streaming is complete
+    if socket.assigns.streaming_message do
+      # Mark the message as no longer streaming
+      final_message = Map.delete(socket.assigns.streaming_message, :streaming)
+      messages = List.update_at(socket.assigns.messages, -1, fn _ -> final_message end)
+
+      socket =
+        socket
+        |> assign(:messages, messages)
+        |> assign(:streaming_message, nil)
+        |> assign(:processing, false)
+
+      {:noreply, socket}
+    else
+      {:noreply, assign(socket, :processing, false)}
+    end
+  end
+
+  def handle_info({:stream_error, reason}, socket) do
+    IO.puts("=== Stream error: #{inspect(reason)} ===")
+    socket =
+      socket
+      |> assign(:processing, false)
+      |> assign(:streaming_message, nil)
+      |> put_flash(:error, "Streaming failed: #{reason}")
+
+    {:noreply, socket}
+  end
+
   def handle_info({:process_question, question}, socket) do
     IO.puts("=== HANDLE_INFO: Processing question: #{question} ===")
     case answer_question(question, socket.assigns.vector_db, socket.assigns.ollama_client) do
@@ -223,6 +299,42 @@ defmodule RagOllamaElixirWeb.RagLive do
     after
       # Clean up temp file
       File.rm(temp_path)
+    end
+  end
+
+  defp answer_question_stream(question, vector_db, client, live_view_pid) do
+    try do
+      with {:ok, query_embedding} <- Embedder.embed(client, question),
+           context_chunks <- Retriever.hybrid_top_n_chunks(question, query_embedding, vector_db, 5, 3, 3) do
+
+        # Start streaming chat
+        Task.start(fn ->
+          case Chat.ask_stream(client, context_chunks, question) do
+            {:ok, stream} ->
+              stream
+              |> Stream.each(fn chunk ->
+                case chunk do
+                  %{"message" => %{"content" => content}} when content != "" ->
+                    send(live_view_pid, {:stream_chunk, content})
+                  %{"done" => true} ->
+                    send(live_view_pid, {:stream_complete})
+                  _ ->
+                    :ok
+                end
+              end)
+              |> Stream.run()
+            {:error, reason} ->
+              send(live_view_pid, {:stream_error, reason})
+          end
+        end)
+
+        {:ok, :started}
+      else
+        {:error, reason} -> {:error, reason}
+        _ -> {:error, "Unexpected error in streaming setup"}
+      end
+    rescue
+      error -> {:error, "Exception: #{inspect(error)}"}
     end
   end
 
@@ -395,9 +507,17 @@ defmodule RagOllamaElixirWeb.RagLive do
                   <%= for message <- @messages do %>
                     <div class={"flex #{if message.role == :user, do: "justify-end", else: "justify-start"}"}>
                       <div class={"max-w-xs lg:max-w-md px-4 py-2 rounded-lg #{if message.role == :user, do: "bg-indigo-600 text-white", else: "bg-gray-200 text-gray-800"}"}>
-                        <p class="text-sm"><%= message.content %></p>
+                        <p class="text-sm">
+                          <%= message.content %>
+                          <%= if Map.get(message, :streaming, false) do %>
+                            <span class="inline-block w-2 h-4 bg-current animate-pulse ml-1">|</span>
+                          <% end %>
+                        </p>
                         <p class={"text-xs mt-1 #{if message.role == :user, do: "text-indigo-200", else: "text-gray-500"}"}>
                           <%= Calendar.strftime(message.timestamp, "%H:%M") %>
+                          <%= if Map.get(message, :streaming, false) do %>
+                            <span class="text-blue-500 ml-1">streaming...</span>
+                          <% end %>
                         </p>
                       </div>
                     </div>
@@ -455,9 +575,21 @@ defmodule RagOllamaElixirWeb.RagLive do
 
     <script>
       // Auto-scroll to bottom of messages
+      function scrollToBottom() {
+        const messagesContainer = document.getElementById('messages-container');
+        if (messagesContainer) {
+          messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+      }
+
+      // Initial scroll
+      scrollToBottom();
+
+      // Auto-scroll when content updates
+      const observer = new MutationObserver(scrollToBottom);
       const messagesContainer = document.getElementById('messages-container');
       if (messagesContainer) {
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        observer.observe(messagesContainer, { childList: true, subtree: true });
       }
 
       // Handle flash fade-out effect
