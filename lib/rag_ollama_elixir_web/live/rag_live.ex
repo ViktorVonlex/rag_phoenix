@@ -1,7 +1,7 @@
 defmodule RagOllamaElixirWeb.RagLive do
   use RagOllamaElixirWeb, :live_view
 
-  alias RagOllamaElixir.{PDFParser, Chunker, SemanticChunker, Embedder, Retriever, Chat}
+  alias RagOllamaElixir.{PDFParser, Chunker, SemanticChunker, Embedder, Chat, VectorDB}
   alias RagOllamaElixir.StructuredChunker
 
   @uploads_dir "priv/static/uploads"
@@ -68,7 +68,11 @@ defmodule RagOllamaElixirWeb.RagLive do
   end
 
   def handle_event("ask_question", %{"question" => question}, socket) do
-    if question != "" and not socket.assigns.processing and socket.assigns.vector_db != [] do
+    # Check if we have documents stored in the VectorDB
+    has_documents = socket.assigns.vector_db != [] or 
+                   (VectorDB.stats() |> Map.get(:document_count, 0)) > 0
+    
+    if question != "" and not socket.assigns.processing and has_documents do
       socket = assign(socket, :processing, true)
 
       # Add user message
@@ -121,11 +125,11 @@ defmodule RagOllamaElixirWeb.RagLive do
       [{temp_path, filename}] ->
         IO.puts("Processing file: #{filename} at #{temp_path}")
         case process_pdf_file(temp_path, socket.assigns.ollama_client, socket.assigns.chunking_strategy) do
-          {:ok, vector_db} ->
-            IO.puts("=== PDF processed successfully! Created #{length(vector_db)} chunks ===")
+          {:ok, document_count} ->
+            IO.puts("=== PDF processed successfully! Created #{document_count} chunks ===")
             socket =
               socket
-              |> assign(:vector_db, vector_db)
+              |> assign(:vector_db, :persistent)  # Flag that we have documents
               |> assign(:uploaded_file, filename)
               |> assign(:processing, false)
               |> put_flash(:info, "PDF processed successfully! You can now ask questions.")
@@ -270,6 +274,9 @@ defmodule RagOllamaElixirWeb.RagLive do
 
   defp process_pdf_file(temp_path, client, chunking_strategy) do
     try do
+      # Clear previous documents
+      VectorDB.clear()
+      
       # Process the PDF
       case PDFParser.extract_text(temp_path) do
         {:ok, text} ->
@@ -288,8 +295,14 @@ defmodule RagOllamaElixirWeb.RagLive do
           # Create embeddings
           case Embedder.embed(client, chunks) do
             {:ok, embeddings} ->
-              vector_db = Enum.zip(chunks, embeddings)
-              {:ok, vector_db}
+              chunks_and_embeddings = Enum.zip(chunks, embeddings)
+              case VectorDB.add_documents(chunks_and_embeddings) do
+                {:ok, _ids} -> 
+                  VectorDB.save()  # Ensure immediate persistence
+                  {:ok, length(chunks)}
+                {:error, reason} -> 
+                  {:error, reason}
+              end
             {:error, reason} ->
               {:error, reason}
           end
@@ -302,14 +315,14 @@ defmodule RagOllamaElixirWeb.RagLive do
     end
   end
 
-  defp answer_question_stream(question, vector_db, client, live_view_pid) do
+  defp answer_question_stream(question, _vector_db, client, live_view_pid) do
     try do
       with {:ok, query_embedding} <- Embedder.embed(client, question),
-           context_chunks <- Retriever.hybrid_top_n_chunks(question, query_embedding, vector_db, 5, 3, 3) do
+           {:ok, search_results} <- VectorDB.search(query_embedding, 5) do
 
         # Start streaming chat
         Task.start(fn ->
-          case Chat.ask_stream(client, context_chunks, question) do
+          case Chat.ask_stream(client, search_results, question) do
             {:ok, stream} ->
               stream
               |> Stream.each(fn chunk ->
@@ -338,10 +351,10 @@ defmodule RagOllamaElixirWeb.RagLive do
     end
   end
 
-  defp answer_question(question, vector_db, client) do
+  defp answer_question(question, _vector_db, client) do
     with {:ok, query_embedding} <- Embedder.embed(client, question),
-         context_chunks <- Retriever.hybrid_top_n_chunks(question, query_embedding, vector_db, 5, 3, 3),
-         {:ok, %{"message" => %{"content" => answer}}} <- Chat.ask(client, context_chunks, question) do
+         {:ok, search_results} <- VectorDB.search(query_embedding, 5),
+         {:ok, %{"message" => %{"content" => answer}}} <- Chat.ask(client, search_results, question) do
       {:ok, answer}
     else
       {:error, reason} -> {:error, reason}

@@ -11,3 +11,4 @@ erl_crash.dump
 *.pdf
 *.txt
 .DS_Store
+priv/vector_db.etf
