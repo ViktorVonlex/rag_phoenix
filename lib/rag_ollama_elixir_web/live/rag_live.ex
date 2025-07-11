@@ -2,22 +2,38 @@ defmodule RagOllamaElixirWeb.RagLive do
   use RagOllamaElixirWeb, :live_view
 
   alias RagOllamaElixir.{PDFParser, Chunker, SemanticChunker, Embedder, Chat, VectorDB}
-  alias RagOllamaElixir.StructuredChunker
+  alias RagOllamaElixir.{Conversations, StructuredChunker}
 
   @uploads_dir "priv/static/uploads"
 
-  def mount(_params, _session, socket) do
+  def mount(params, _session, socket) do
     File.mkdir_p!(@uploads_dir)
+
+    # Get the current user from the socket (provided by auth)
+    current_user = socket.assigns.current_user
+
+    # Check if we're loading a specific conversation
+    conversation = case params["conversation_id"] do
+      nil -> nil
+      conversation_id ->
+        Conversations.get_user_conversation(current_user.id, conversation_id)
+    end
+
+    # Load user's conversations for the sidebar
+    user_conversations = Conversations.list_conversations(current_user)
 
     socket =
       socket
-      |> assign(:messages, [])
+      |> assign(:current_user, current_user)
+      |> assign(:conversation, conversation)
+      |> assign(:user_conversations, user_conversations)
+      |> assign(:messages, conversation && conversation.messages || [])
       |> assign(:current_question, "")
       |> assign(:vector_db, [])
       |> assign(:processing, false)
       |> assign(:ollama_client, nil)
       |> assign(:uploaded_file, nil)
-      |> assign(:chunking_strategy, :semantic)  # :semantic or :basic
+      |> assign(:chunking_strategy, conversation && String.to_atom(conversation.chunking_strategy || "semantic") || :semantic)
       |> assign(:streaming_message, nil)  # For streaming responses
       |> allow_upload(:pdf,
           accept: ~w(.pdf),
@@ -69,9 +85,9 @@ defmodule RagOllamaElixirWeb.RagLive do
 
   def handle_event("ask_question", %{"question" => question}, socket) do
     # Check if we have documents stored in the VectorDB
-    has_documents = socket.assigns.vector_db != [] or 
+    has_documents = socket.assigns.vector_db != [] or
                    (VectorDB.stats() |> Map.get(:document_count, 0)) > 0
-    
+
     if question != "" and not socket.assigns.processing and has_documents do
       socket = assign(socket, :processing, true)
 
@@ -276,7 +292,7 @@ defmodule RagOllamaElixirWeb.RagLive do
     try do
       # Clear previous documents
       VectorDB.clear()
-      
+
       # Process the PDF
       case PDFParser.extract_text(temp_path) do
         {:ok, text} ->
@@ -297,10 +313,10 @@ defmodule RagOllamaElixirWeb.RagLive do
             {:ok, embeddings} ->
               chunks_and_embeddings = Enum.zip(chunks, embeddings)
               case VectorDB.add_documents(chunks_and_embeddings) do
-                {:ok, _ids} -> 
+                {:ok, _ids} ->
                   VectorDB.save()  # Ensure immediate persistence
                   {:ok, length(chunks)}
-                {:error, reason} -> 
+                {:error, reason} ->
                   {:error, reason}
               end
             {:error, reason} ->
@@ -370,13 +386,15 @@ defmodule RagOllamaElixirWeb.RagLive do
     ]
   end
 
-  defp chunking_toggle_color(:semantic), do: "bg-indigo-600"
-  defp chunking_toggle_color(:basic), do: "bg-gray-400"
-  defp chunking_toggle_color(:structured), do: "bg-green-600"
+  defp chunking_toggle_color(strategy) when strategy in [:semantic, "semantic"], do: "bg-indigo-600"
+  defp chunking_toggle_color(strategy) when strategy in [:basic, "basic"], do: "bg-gray-400"
+  defp chunking_toggle_color(strategy) when strategy in [:structured, "structured"], do: "bg-green-600"
+  defp chunking_toggle_color(_), do: "bg-indigo-600"
 
-  defp chunking_toggle_position(:semantic), do: "translate-x-0"
-  defp chunking_toggle_position(:basic), do: "translate-x-3"
-  defp chunking_toggle_position(:structured), do: "translate-x-6"
+  defp chunking_toggle_position(strategy) when strategy in [:semantic, "semantic"], do: "translate-x-0"
+  defp chunking_toggle_position(strategy) when strategy in [:basic, "basic"], do: "translate-x-3"
+  defp chunking_toggle_position(strategy) when strategy in [:structured, "structured"], do: "translate-x-6"
+  defp chunking_toggle_position(_), do: "translate-x-0"
 
   def render(assigns) do
     ~H"""
@@ -400,12 +418,14 @@ defmodule RagOllamaElixirWeb.RagLive do
                   <label class="text-sm font-medium text-gray-700">Chunking Strategy:</label>
                   <p class="text-xs text-gray-500">
                     <%= case @chunking_strategy do %>
-                      <% :semantic -> %>
+                      <% strategy when strategy in [:semantic, "semantic"] -> %>
                         Semantic - Groups similar sentences together (slower, more accurate)
-                      <% :basic -> %>
+                      <% strategy when strategy in [:basic, "basic"] -> %>
                         Basic - Simple text splitting (faster)
-                      <% :structured -> %>
+                      <% strategy when strategy in [:structured, "structured"] -> %>
                         Structured - Keeps related info together (best for transcripts, forms)
+                      <% _ -> %>
+                        Semantic - Groups similar sentences together (slower, more accurate)
                     <% end %>
                   </p>
                 </div>

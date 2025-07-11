@@ -43,7 +43,7 @@ defmodule RagOllamaElixir.VectorDB do
   @impl true
   def init(_opts) do
     File.mkdir_p!(Path.dirname(@db_file))
-    
+
     state = case File.read(@db_file) do
       {:ok, binary} ->
         try do
@@ -51,13 +51,13 @@ defmodule RagOllamaElixir.VectorDB do
         rescue
           _ -> %__MODULE__{}
         end
-      {:error, _} -> 
+      {:error, _} ->
         %__MODULE__{}
     end
 
     # Schedule periodic saves
     Process.send_after(self(), :save, @save_interval)
-    
+
     Logger.info("VectorDB started with #{map_size(state.vectors)} documents")
     {:ok, state}
   end
@@ -72,13 +72,13 @@ defmodule RagOllamaElixir.VectorDB do
         timestamp: DateTime.utc_now(),
         length: String.length(chunk)
       })
-      
-      new_state = %{acc_state | 
-        vectors: new_vectors, 
-        metadata: new_metadata, 
+
+      new_state = %{acc_state |
+        vectors: new_vectors,
+        metadata: new_metadata,
         next_id: id + 1
       }
-      
+
       {new_state, [id | acc_ids]}
     end)
 
@@ -138,7 +138,7 @@ defmodule RagOllamaElixir.VectorDB do
       binary = :erlang.term_to_binary(state)
       File.write(@db_file, binary)
     rescue
-      error -> 
+      error ->
         Logger.error("Failed to save VectorDB: #{inspect(error)}")
         {:error, error}
     end
@@ -148,7 +148,7 @@ defmodule RagOllamaElixir.VectorDB do
     dot_product = Enum.zip(vec1, vec2) |> Enum.reduce(0, fn {a, b}, acc -> acc + a * b end)
     norm1 = :math.sqrt(Enum.reduce(vec1, 0, fn x, acc -> acc + x * x end))
     norm2 = :math.sqrt(Enum.reduce(vec2, 0, fn x, acc -> acc + x * x end))
-    
+
     if norm1 == 0 or norm2 == 0 do
       0.0
     else

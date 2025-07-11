@@ -9,7 +9,7 @@ defmodule RagOllamaElixir.Application do
   def start(_type, _args) do
     children = [
       RagOllamaElixirWeb.Telemetry,
-      # RagOllamaElixir.Repo,
+      RagOllamaElixir.Repo,
       {DNSCluster, query: Application.get_env(:rag_ollama_elixir, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: RagOllamaElixir.PubSub},
       # Start the Finch HTTP client for sending emails
