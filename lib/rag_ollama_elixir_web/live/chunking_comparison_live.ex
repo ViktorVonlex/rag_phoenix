@@ -19,7 +19,6 @@ defmodule RagOllamaElixirWeb.ChunkingComparisonLive do
           max_entries: 1,
           max_file_size: 50_000_000)
 
-    # Initialize Ollama client
     client = Ollama.init()
     {:ok, assign(socket, :ollama_client, client)}
   end
@@ -109,7 +108,6 @@ defmodule RagOllamaElixirWeb.ChunkingComparisonLive do
     try do
       case PDFParser.extract_text(temp_path) do
         {:ok, text} ->
-          # Test different chunking strategies
           basic_chunks = Chunker.chunk(text)
 
           semantic_chunks = case SemanticChunker.chunk(text, client) do
@@ -122,7 +120,6 @@ defmodule RagOllamaElixirWeb.ChunkingComparisonLive do
             _ -> ["Error: Structured chunking failed"]
           end
 
-          # You can add more strategies here
           comparison = %{
             basic: %{
               name: "Basic Chunking",

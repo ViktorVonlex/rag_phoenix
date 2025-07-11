@@ -3,7 +3,7 @@ defmodule RagOllamaElixir.Chat do
   Handles assembling context and interacting with Ollama LLM for chat.
   """
 
-  @chat_model "hf.co/bartowski/Llama-3.2-1B-Instruct-GGUF"
+  alias RagOllamaElixir.Models
 
   # Builds the prompt and calls Ollama chat
   def ask(client, context_chunks, user_query, opts \\ []) do
@@ -24,7 +24,7 @@ defmodule RagOllamaElixir.Chat do
 
     params =
       [
-        model: @chat_model,
+        model: Models.chat_model(),
         messages: messages
       ]
       |> Keyword.merge(opts)

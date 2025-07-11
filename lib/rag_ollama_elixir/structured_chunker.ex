@@ -21,7 +21,7 @@ defmodule RagOllamaElixir.StructuredChunker do
   defp clean_text(text) do
     text
     # Don't normalize whitespace too aggressively - layout flag preserves important spacing
-    |> String.replace(~r/\r\n|\r/, "\n")  # Normalize line endings only
+    |> String.replace(~r/\r\n|\r/, "\n")
     |> String.trim()
   end
 
