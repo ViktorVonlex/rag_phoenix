@@ -1,11 +1,33 @@
-defmodule RagOllamaElixir.StructuredChunker do
+defmodule RagOllamaElixir.Chunkers.StructuredChunker do
   @moduledoc """
   A chunker specialized for structured documents like transcripts, invoices, forms, etc.
   Attempts to keep related information together by detecting patterns and reconstructing
   logical groups.
   """
 
-  def chunk(text) do
+  @behaviour RagOllamaElixir.Chunkers.ChunkerBehaviour
+
+  @impl true
+  def chunk(text, _opts \\ []) do
+    chunks = do_chunk(text)
+    {:ok, chunks}
+  end
+
+  @impl true
+  def metadata do
+    %{
+      name: "Structured Chunking",
+      description: "Specialized chunking for structured documents like transcripts and forms",
+      requires_client: false
+    }
+  end
+
+  @impl true
+  def validate_text(text) when is_binary(text) and byte_size(text) > 0, do: :ok
+  def validate_text(_), do: {:error, "Text must be a non-empty string"}
+
+  # Private implementation
+  defp do_chunk(text) do
     # Clean and normalize the text
     text = clean_text(text)
 
@@ -61,7 +83,8 @@ defmodule RagOllamaElixir.StructuredChunker do
     # Ensure we have at least some chunks
     if Enum.empty?(chunks) do
       # Fall back to basic chunking if pattern matching fails
-      RagOllamaElixir.Chunker.chunk(text)
+      {:ok, fallback_chunks} = RagOllamaElixir.Chunkers.BaseChunker.chunk(text, [])
+      fallback_chunks
     else
       chunks
     end

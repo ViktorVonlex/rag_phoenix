@@ -1,7 +1,8 @@
 defmodule RagOllamaElixirWeb.ChunkingComparisonLive do
   use RagOllamaElixirWeb, :live_view
 
-  alias RagOllamaElixir.{PDFParser, Chunker, SemanticChunker, StructuredChunker}
+  alias RagOllamaElixir.PDFParser
+  alias RagOllamaElixir.Chunkers.{BaseChunker, SemanticChunker, StructuredChunker}
 
   @uploads_dir "priv/static/uploads"
 
@@ -108,17 +109,14 @@ defmodule RagOllamaElixirWeb.ChunkingComparisonLive do
     try do
       case PDFParser.extract_text(temp_path) do
         {:ok, text} ->
-          basic_chunks = Chunker.chunk(text)
+          {:ok, basic_chunks} = BaseChunker.chunk(text, [])
 
-          semantic_chunks = case SemanticChunker.chunk(text, client) do
+          semantic_chunks = case SemanticChunker.chunk(text, client: client) do
             {:ok, chunks} -> chunks
             {:error, _} -> ["Error: Semantic chunking failed"]
           end
 
-          structured_chunks = case StructuredChunker.chunk(text) do
-            chunks when is_list(chunks) -> chunks
-            _ -> ["Error: Structured chunking failed"]
-          end
+          {:ok, structured_chunks} = StructuredChunker.chunk(text, [])
 
           comparison = %{
             basic: %{
@@ -273,12 +271,12 @@ defmodule RagOllamaElixirWeb.ChunkingComparisonLive do
                   </div>
                   <div class="p-6 max-h-96 overflow-y-auto space-y-4">
                     <%= for {chunk, index} <- Enum.with_index(strategy.chunks) do %>
-                      <div class="border rounded-lg p-4 hover:bg-gray-50 transition-colors">
+                      <div class="border rounded-lg p-4 hover:bg-gray-50 transition-colors overflow-hidden">
                         <div class="flex justify-between items-center mb-2">
                           <span class="text-xs font-medium text-gray-500">Chunk #<%= index + 1 %></span>
                           <span class="text-xs text-gray-400"><%= String.length(chunk) %> chars</span>
                         </div>
-                        <p class="text-sm text-gray-700 leading-relaxed"><%= chunk %></p>
+                        <p class="text-sm text-gray-700 leading-relaxed break-words overflow-wrap-anywhere"><%= chunk %></p>
                       </div>
                     <% end %>
                   </div>

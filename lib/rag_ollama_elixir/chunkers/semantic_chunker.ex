@@ -1,4 +1,4 @@
-defmodule RagOllamaElixir.SemanticChunker do
+defmodule RagOllamaElixir.Chunkers.SemanticChunker do
   @moduledoc """
   Semantic chunker for PDF or long text.
   - Splits text into sentences.
@@ -8,11 +8,38 @@ defmodule RagOllamaElixir.SemanticChunker do
   - Optionally merges small chunks up to a target size.
   """
 
+  @behaviour RagOllamaElixir.Chunkers.ChunkerBehaviour
+
   @default_threshold 0.7
   @default_min_chunk_size 200
 
   # Public entry point
-  def chunk(text, client, opts \\ []) do
+  @impl true
+  def chunk(text, opts \\ []) do
+    client = Keyword.get(opts, :client)
+
+    if is_nil(client) do
+      {:error, "Semantic chunking requires :client option"}
+    else
+      do_chunk(text, client, opts)
+    end
+  end
+
+  @impl true
+  def metadata do
+    %{
+      name: "Semantic Chunking",
+      description: "Groups similar sentences together using AI embeddings",
+      requires_client: true
+    }
+  end
+
+  @impl true
+  def validate_text(text) when is_binary(text) and byte_size(text) > 0, do: :ok
+  def validate_text(_), do: {:error, "Text must be a non-empty string"}
+
+  # Internal implementation
+  defp do_chunk(text, client, opts) do
     try do
       threshold = Keyword.get(opts, :threshold, @default_threshold)
       min_chunk_size = Keyword.get(opts, :min_chunk_size, @default_min_chunk_size)

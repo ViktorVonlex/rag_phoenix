@@ -1,8 +1,9 @@
 defmodule RagOllamaElixirWeb.RagLive do
   use RagOllamaElixirWeb, :live_view
 
-  alias RagOllamaElixir.{PDFParser, Chunker, SemanticChunker, Embedder, Chat, VectorDB}
-  alias RagOllamaElixir.{Conversations, StructuredChunker}
+  alias RagOllamaElixir.{PDFParser, Embedder, Chat, VectorDB}
+  alias RagOllamaElixir.{Conversations}
+  alias RagOllamaElixir.Chunkers.{BaseChunker, SemanticChunker, StructuredChunker}
 
   @uploads_dir "priv/static/uploads"
 
@@ -368,26 +369,30 @@ defmodule RagOllamaElixirWeb.RagLive do
           # Chunk content based on strategy
           chunks = case chunking_strategy do
             strategy when strategy in [:semantic, "semantic"] ->
-              case SemanticChunker.chunk(content, client) do
+              case SemanticChunker.chunk(content, client: client) do
                 {:ok, semantic_chunks} -> semantic_chunks
                 {:error, reason} ->
                   IO.puts("=== Semantic chunking failed: #{reason}, falling back to basic ===")
-                  Chunker.chunk(content)
+                  {:ok, fallback_chunks} = BaseChunker.chunk(content)
+                  fallback_chunks
               end
 
             strategy when strategy in [:basic, "basic"] ->
-              Chunker.chunk(content)
+              {:ok, basic_chunks} = BaseChunker.chunk(content)
+              basic_chunks
 
             strategy when strategy in [:structured, "structured"] ->
-              StructuredChunker.chunk(content)
+              {:ok, structured_chunks} = StructuredChunker.chunk(content)
+              structured_chunks
 
             _ ->
               IO.puts("=== Unknown strategy #{chunking_strategy}, using semantic ===")
-              case SemanticChunker.chunk(content, client) do
+              case SemanticChunker.chunk(content, client: client) do
                 {:ok, semantic_chunks} -> semantic_chunks
                 {:error, reason} ->
                   IO.puts("=== Semantic chunking failed: #{reason}, falling back to basic ===")
-                  Chunker.chunk(content)
+                  {:ok, fallback_chunks} = BaseChunker.chunk(content)
+                  fallback_chunks
               end
           end
 

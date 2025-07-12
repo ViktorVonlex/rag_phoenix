@@ -12,3 +12,16 @@ erl_crash.dump
 *.txt
 .DS_Store
 priv/vector_db.etf
+
+# Generated CSS/JS assets
+priv/static/assets/app.css
+priv/static/assets/app.js
+priv/static/assets/app.css.map
+priv/static/assets/app.js.map
+
+# Build tools binaries (downloaded by mix tasks)
+_build/esbuild-*
+_build/tailwind-*
+
+# Uploads directory (user-uploaded files)
+priv/static/uploads/
