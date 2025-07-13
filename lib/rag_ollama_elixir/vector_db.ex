@@ -6,6 +6,8 @@ defmodule RagOllamaElixir.VectorDB do
 
   use GenServer
   require Logger
+  
+  alias RagOllamaElixir.Retriever
 
   @db_file "priv/vector_db.etf"
   @save_interval 30_000  # Save every 30 seconds
@@ -18,16 +20,20 @@ defmodule RagOllamaElixir.VectorDB do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  def add_documents(chunks_and_embeddings, conversation_id \\ nil) do
+  def add_documents(chunks_and_embeddings, conversation_id) when not is_nil(conversation_id) do
     GenServer.call(__MODULE__, {:add_documents, chunks_and_embeddings, conversation_id})
   end
 
-  def store(text, embedding, conversation_id \\ nil) do
+  def store(text, embedding, conversation_id) when not is_nil(conversation_id) do
     add_documents([{text, embedding}], conversation_id)
   end
 
   def search(query_embedding, top_k \\ 5, conversation_id \\ nil) do
     GenServer.call(__MODULE__, {:search, query_embedding, top_k, conversation_id})
+  end
+
+  def hybrid_search(query_text, query_embedding, top_k \\ 5, conversation_id \\ nil) do
+    GenServer.call(__MODULE__, {:hybrid_search, query_text, query_embedding, top_k, conversation_id})
   end
 
   def clear(conversation_id \\ nil) do
@@ -46,7 +52,14 @@ defmodule RagOllamaElixir.VectorDB do
     GenServer.call(__MODULE__, :save)
   end
 
-  # Server Implementation
+  def debug_chunks(conversation_id \\ nil) do
+    GenServer.call(__MODULE__, {:debug_chunks, conversation_id})
+  end
+
+  def debug_all_chunks() do
+    GenServer.call(__MODULE__, :debug_all_chunks)
+  end
+
 
   @impl true
   def init(_opts) do
@@ -96,27 +109,14 @@ defmodule RagOllamaElixir.VectorDB do
 
   @impl true
   def handle_call({:search, query_embedding, top_k, conversation_id}, _from, state) do
-    # Filter by conversation_id if provided
-    vectors_to_search = case conversation_id do
-      nil -> state.vectors
-      conv_id ->
-        state.vectors
-        |> Enum.filter(fn {id, _embedding} ->
-          metadata = Map.get(state.metadata, id)
-          metadata && Map.get(metadata, :conversation_id) == conv_id
-        end)
-        |> Map.new()
-    end
+    results = do_search(query_embedding, top_k, conversation_id, state)
 
-    results = vectors_to_search
-    |> Enum.map(fn {id, embedding} ->
-      similarity = cosine_similarity(query_embedding, embedding)
-      metadata = Map.get(state.metadata, id)
-      {id, similarity, metadata.chunk}
-    end)
-    |> Enum.sort_by(fn {_id, similarity, _chunk} -> similarity end, :desc)
-    |> Enum.take(top_k)
-    |> Enum.map(fn {_id, similarity, chunk} -> {chunk, similarity} end)
+    {:reply, {:ok, results}, state}
+  end
+
+  @impl true
+  def handle_call({:hybrid_search, query_text, query_embedding, top_k, conversation_id}, _from, state) do
+    results = do_hybrid_search(query_text, query_embedding, top_k, conversation_id, state)
 
     {:reply, {:ok, results}, state}
   end
@@ -184,6 +184,33 @@ defmodule RagOllamaElixir.VectorDB do
   end
 
   @impl true
+  def handle_call({:debug_chunks, conversation_id}, _from, state) do
+    # Get all chunks for the conversation or all chunks if no conversation_id
+    chunks = case conversation_id do
+      nil ->
+        state.metadata
+        |> Enum.map(fn {_id, metadata} -> {metadata.chunk, metadata} end)
+
+      conv_id ->
+        state.metadata
+        |> Enum.filter(fn {_id, metadata} ->
+          Map.get(metadata, :conversation_id) == conv_id
+        end)
+        |> Enum.map(fn {_id, metadata} -> {metadata.chunk, metadata} end)
+    end
+
+    {:reply, {:ok, chunks}, state}
+  end
+
+  @impl true
+  def handle_call(:debug_all_chunks, _from, state) do
+    all_chunks = state.metadata
+    |> Enum.map(fn {_id, metadata} -> {metadata.chunk, metadata.conversation_id} end)
+
+    {:reply, {:ok, all_chunks}, state}
+  end
+
+  @impl true
   def handle_info(:save, state) do
     save_to_disk(state)
     Process.send_after(self(), :save, @save_interval)
@@ -203,15 +230,68 @@ defmodule RagOllamaElixir.VectorDB do
     end
   end
 
-  defp cosine_similarity(vec1, vec2) when is_list(vec1) and is_list(vec2) do
-    dot_product = Enum.zip(vec1, vec2) |> Enum.reduce(0, fn {a, b}, acc -> acc + a * b end)
-    norm1 = :math.sqrt(Enum.reduce(vec1, 0, fn x, acc -> acc + x * x end))
-    norm2 = :math.sqrt(Enum.reduce(vec2, 0, fn x, acc -> acc + x * x end))
-
-    if norm1 == 0 or norm2 == 0 do
-      0.0
-    else
-      dot_product / (norm1 * norm2)
+  defp do_search(query_embedding, top_k, conversation_id, state) do
+    # Filter by conversation_id if provided
+    vectors_to_search = case conversation_id do
+      nil -> state.vectors
+      conv_id ->
+        state.vectors
+        |> Enum.filter(fn {id, _embedding} ->
+          metadata = Map.get(state.metadata, id)
+          metadata && Map.get(metadata, :conversation_id) == conv_id
+        end)
+        |> Map.new()
     end
+
+    Logger.info("Searching #{map_size(vectors_to_search)} vectors for conversation #{conversation_id}")
+
+    vectors_to_search
+    |> Enum.map(fn {id, embedding} ->
+      similarity = Retriever.cosine_similarity(query_embedding, embedding)
+      metadata = Map.get(state.metadata, id)
+      {id, similarity, metadata.chunk}
+    end)
+    |> Enum.sort_by(fn {_id, similarity, _chunk} -> similarity end, :desc)
+    |> Enum.take(top_k)
+    |> Enum.map(fn {_id, similarity, chunk} -> {chunk, similarity} end)
+  end
+
+  defp do_hybrid_search(query_text, query_embedding, top_k, conversation_id, state) do
+    # Filter by conversation_id if provided
+    vectors_to_search = case conversation_id do
+      nil -> state.vectors
+      conv_id ->
+        state.vectors
+        |> Enum.filter(fn {id, _embedding} ->
+          metadata = Map.get(state.metadata, id)
+          metadata && Map.get(metadata, :conversation_id) == conv_id
+        end)
+        |> Map.new()
+    end
+
+    Logger.info("Hybrid searching #{map_size(vectors_to_search)} vectors for conversation #{conversation_id}")
+
+    # Convert the internal vector storage format to what Retriever expects: [{chunk, embedding}, ...]
+    vector_db_for_retriever = vectors_to_search
+    |> Enum.map(fn {id, embedding} ->
+      metadata = Map.get(state.metadata, id)
+      {metadata.chunk, embedding}
+    end)
+
+    # Use Retriever's hybrid search with intelligent parameters
+    # Dense retrieval: get top 10 semantic matches
+    # Lexical retrieval: get top 5 keyword matches  
+    # Final: combine and return top_k results
+    n_dense = min(10, top_k * 2)
+    n_lexical = min(5, top_k)
+    
+    Retriever.hybrid_top_n_chunks(
+      query_text, 
+      query_embedding, 
+      vector_db_for_retriever, 
+      n_dense, 
+      n_lexical, 
+      top_k
+    )
   end
 end

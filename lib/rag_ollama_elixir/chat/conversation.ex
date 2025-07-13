@@ -7,9 +7,9 @@ defmodule RagOllamaElixir.Chat.Conversation do
 
   schema "conversations" do
     field :title, :string
-    field :model_used, :string
     field :chunking_strategy, :string
     field :document_name, :string
+    field :metadata, :map
 
     belongs_to :user, RagOllamaElixir.Accounts.User
     has_many :messages, RagOllamaElixir.Chat.Message

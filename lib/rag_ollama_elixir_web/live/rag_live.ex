@@ -16,8 +16,13 @@ defmodule RagOllamaElixirWeb.RagLive do
     # Check if we're loading a specific conversation
     conversation = case params["conversation_id"] do
       nil -> nil
-      conversation_id ->
-        Conversations.get_user_conversation(current_user.id, conversation_id)
+      conversation_id_string ->
+        try do
+          conversation_id = String.to_integer(conversation_id_string)
+          Conversations.get_user_conversation(current_user.id, conversation_id)
+        rescue
+          ArgumentError -> nil
+        end
     end
 
     # Load user's conversations for the sidebar
@@ -45,7 +50,7 @@ defmodule RagOllamaElixirWeb.RagLive do
       |> assign(:ollama_client, nil)
       |> assign(:uploaded_file, conversation && conversation.document_name)
       |> assign(:chunking_strategy, conversation && String.to_atom(conversation.chunking_strategy || "semantic") || :semantic)
-      |> assign(:streaming_message, nil)  # For streaming responses
+      |> assign(:streaming_message, nil)
       |> allow_upload(:pdf,
           accept: ~w(.pdf),
           max_entries: 1,
@@ -100,27 +105,40 @@ defmodule RagOllamaElixirWeb.RagLive do
                    (VectorDB.stats() |> Map.get(:document_count, 0)) > 0
 
     if question != "" and not socket.assigns.processing and has_documents do
+      # Ensure a conversation exists
+      socket = ensure_conversation_exists(socket)
       socket = assign(socket, :processing, true)
 
-      # Add user message
-      user_message = %{role: :user, content: question, timestamp: DateTime.utc_now() |> DateTime.truncate(:second)}
-      messages = socket.assigns.messages ++ [user_message]
+      # Save user message to database
+      case Conversations.add_message_to_conversation(socket.assigns.conversation, "user", question) do
+        {:ok, saved_user_message} ->
+          # Add user message to UI
+          user_message = %{role: :user, content: question, timestamp: saved_user_message.inserted_at}
+          messages = socket.assigns.messages ++ [user_message]
 
-      # Start streaming assistant message
-      assistant_message = %{role: :assistant, content: "", timestamp: DateTime.utc_now() |> DateTime.truncate(:second), streaming: true}
-      messages = messages ++ [assistant_message]
+          # Start streaming assistant message
+          assistant_message = %{role: :assistant, content: "", timestamp: DateTime.utc_now() |> DateTime.truncate(:second), streaming: true}
+          messages = messages ++ [assistant_message]
 
-      socket =
-        socket
-        |> assign(:messages, messages)
-        |> assign(:streaming_message, assistant_message)
+          socket =
+            socket
+            |> assign(:messages, messages)
+            |> assign(:streaming_message, assistant_message)
 
-      live_view_pid = self()
-      Task.start(fn ->
-        send(live_view_pid, {:process_question_stream, question})
-      end)
+          live_view_pid = self()
+          Task.start(fn ->
+            send(live_view_pid, {:process_question_stream, question})
+          end)
 
-      {:noreply, assign(socket, :current_question, "")}
+          {:noreply, assign(socket, :current_question, "")}
+
+        {:error, _} ->
+          socket =
+            socket
+            |> assign(:processing, false)
+            |> put_flash(:error, "Failed to save message")
+          {:noreply, socket}
+      end
     else
       {:noreply, socket}
     end
@@ -150,7 +168,7 @@ defmodule RagOllamaElixirWeb.RagLive do
       conversation ->
         case Conversations.delete_conversation(conversation) do
           {:ok, _} ->
-            # Refresh conversations list and redirect to main page if we deleted the current conversation
+            # Refresh conversations list and redirect to main page if current conversation is deleted
             user_conversations = Conversations.list_conversations(current_user)
 
             socket =
@@ -158,7 +176,6 @@ defmodule RagOllamaElixirWeb.RagLive do
               |> assign(:user_conversations, user_conversations)
               |> put_flash(:info, "Conversation deleted successfully")
 
-            # If we deleted the current conversation, redirect to main page
             if socket.assigns.conversation && socket.assigns.conversation.id == String.to_integer(conversation_id) do
               {:noreply, push_navigate(socket, to: ~p"/rag")}
             else
@@ -180,12 +197,40 @@ defmodule RagOllamaElixirWeb.RagLive do
     IO.puts("=== HANDLE_INFO: Processing upload started ===")
     IO.inspect(uploaded_files, label: "Uploaded files")
 
+    # Ensure a conversation exists before processing
+    socket = ensure_conversation_exists(socket)
+
     case uploaded_files do
       [{temp_path, filename}] ->
         IO.puts("Processing file: #{filename} at #{temp_path}")
-        case process_pdf_file(temp_path, socket.assigns.ollama_client, socket.assigns.chunking_strategy, socket.assigns.conversation && socket.assigns.conversation.id) do
+        case process_pdf_file(temp_path, socket.assigns.ollama_client, socket.assigns.chunking_strategy, socket.assigns.conversation.id) do
           {:ok, document_count} ->
             IO.puts("=== PDF processed successfully! Created #{document_count} chunks ===")
+
+            # Update conversation with document info
+            clean_filename = Path.basename(filename, ".pdf")
+            update_attrs = %{
+              document_name: filename,
+              chunking_strategy: to_string(socket.assigns.chunking_strategy)
+            }
+
+            # Also update title if it's still "New Chat"
+            update_attrs = if socket.assigns.conversation.title == "New Chat" do
+              Map.put(update_attrs, :title, clean_filename)
+            else
+              update_attrs
+            end
+
+            socket = case Conversations.update_conversation(socket.assigns.conversation, update_attrs) do
+              {:ok, updated_conversation} ->
+                user_conversations = Conversations.list_conversations(socket.assigns.current_user)
+                socket
+                |> assign(:conversation, updated_conversation)
+                |> assign(:user_conversations, user_conversations)
+              {:error, _} ->
+                socket
+            end
+
             socket =
               socket
               |> assign(:vector_db, :persistent)  # Flag that we have documents
@@ -197,7 +242,12 @@ defmodule RagOllamaElixirWeb.RagLive do
             Process.send_after(self(), :start_flash_fade, 3000)
             Process.send_after(self(), :clear_flash, 3500)
 
-            {:noreply, socket}
+            # Redirect to conversation URL if we created a new conversation
+            if socket.assigns.conversation do
+              {:noreply, push_navigate(socket, to: ~p"/rag/#{socket.assigns.conversation.id}")}
+            else
+              {:noreply, socket}
+            end
 
           {:error, reason} ->
             IO.puts("=== PDF processing failed: #{inspect(reason)} ===")
@@ -231,7 +281,11 @@ defmodule RagOllamaElixirWeb.RagLive do
 
   def handle_info({:process_question_stream, question}, socket) do
     IO.puts("=== HANDLE_INFO: Processing question stream: #{question} ===")
-    case answer_question_stream(question, socket.assigns.vector_db, socket.assigns.ollama_client, self(), socket.assigns.conversation && socket.assigns.conversation.id) do
+
+    # Ensure a conversation exists before processing the question
+    socket = ensure_conversation_exists(socket)
+
+    case answer_question_stream(question, socket.assigns.vector_db, socket.assigns.ollama_client, self(), socket.assigns.conversation.id) do
       {:ok, _task} ->
         # Streaming started successfully, messages will come via handle_info
         {:noreply, socket}
@@ -351,7 +405,6 @@ defmodule RagOllamaElixirWeb.RagLive do
   defp process_pdf_file(temp_path, client, chunking_strategy, conversation_id) do
     IO.puts("=== Starting PDF processing with strategy: #{chunking_strategy} ===")
 
-    # Clear any existing vectors for this conversation (or all if no conversation)
     if conversation_id do
       VectorDB.clear(conversation_id)
       IO.puts("=== Cleared existing vectors for conversation #{conversation_id} ===")
@@ -447,10 +500,10 @@ defmodule RagOllamaElixirWeb.RagLive do
       # Get embeddings for the question
       case Embedder.embed(client, question) do
         {:ok, query_embedding} ->
-          # Search the persistent vector database
-          case VectorDB.search(query_embedding, 5, conversation_id) do
+          # Search the persistent vector database using hybrid retrieval
+          case VectorDB.hybrid_search(question, query_embedding, 5, conversation_id) do
             {:ok, search_results} ->
-              IO.puts("=== Found #{length(search_results)} relevant chunks ===")
+              IO.puts("=== Found #{length(search_results)} relevant chunks using hybrid retrieval ===")
 
               # Start streaming chat
               case Chat.ask_stream(client, search_results, question, self()) do
@@ -579,6 +632,27 @@ defmodule RagOllamaElixirWeb.RagLive do
       String.slice(title, 0, 47) <> "..."
     else
       title
+    end
+  end
+
+  # Helper function to ensure a conversation exists
+  defp ensure_conversation_exists(socket) do
+    case socket.assigns.conversation do
+      nil ->
+        # Create a new conversation for this user
+        user = socket.assigns.current_user
+        case Conversations.create_conversation(%{user_id: user.id, title: "New Chat"}) do
+          {:ok, conversation} ->
+            user_conversations = Conversations.list_conversations(user)
+            socket
+            |> assign(:conversation, conversation)
+            |> assign(:user_conversations, user_conversations)
+          {:error, _} ->
+            # If conversation creation fails, BIG PROBLEM
+            socket
+        end
+      _conversation ->
+        socket
     end
   end
 
