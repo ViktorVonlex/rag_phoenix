@@ -4,6 +4,7 @@ defmodule RagOllamaElixir.Conversations.Conversation do
 
   alias RagOllamaElixir.Accounts.User
   alias RagOllamaElixir.Conversations.Message
+  alias RagOllamaElixir.Conversations.DocumentChunk
 
   schema "conversations" do
     field :title, :string
@@ -13,6 +14,7 @@ defmodule RagOllamaElixir.Conversations.Conversation do
 
     belongs_to :user, User
     has_many :messages, Message, preload_order: [asc: :inserted_at]
+    has_many :document_chunks, DocumentChunk, preload_order: [asc: :chunk_index]
 
     timestamps(type: :utc_datetime)
   end

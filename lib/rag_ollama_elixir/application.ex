@@ -14,8 +14,6 @@ defmodule RagOllamaElixir.Application do
       {Phoenix.PubSub, name: RagOllamaElixir.PubSub},
       # Start the Finch HTTP client for sending emails
       {Finch, name: RagOllamaElixir.Finch},
-      # Start the VectorDB for document embeddings
-      RagOllamaElixir.VectorDB,
       # Start a worker by calling: RagOllamaElixir.Worker.start_link(arg)
       # {RagOllamaElixir.Worker, arg},
       # Start to serve requests, typically the last entry

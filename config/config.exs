@@ -11,6 +11,9 @@ config :rag_ollama_elixir,
   ecto_repos: [RagOllamaElixir.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+config :rag_ollama_elixir, RagOllamaElixir.Repo,
+  types: RagOllamaElixir.PostgrexTypes
+
 # Configures the endpoint
 config :rag_ollama_elixir, RagOllamaElixirWeb.Endpoint,
   url: [host: "localhost"],

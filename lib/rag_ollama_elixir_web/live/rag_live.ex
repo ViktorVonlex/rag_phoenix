@@ -1,7 +1,7 @@
 defmodule RagOllamaElixirWeb.RagLive do
   use RagOllamaElixirWeb, :live_view
 
-  alias RagOllamaElixir.{PDFParser, Embedder, Chat, VectorDB}
+  alias RagOllamaElixir.{PDFParser, Embedder, Chat, VectorStore}
   alias RagOllamaElixir.{Conversations}
   alias RagOllamaElixir.Chunkers.{BaseChunker, SemanticChunker, StructuredChunker}
 
@@ -31,10 +31,7 @@ defmodule RagOllamaElixirWeb.RagLive do
     # Check if conversation has embeddings loaded
     conversation_has_embeddings = case conversation do
       %{id: conv_id} ->
-        case VectorDB.load_conversation(conv_id) do
-          {:ok, has_vectors} -> has_vectors
-          _ -> false
-        end
+        VectorStore.has_vectors?(conv_id)
       _ -> false
     end
 
@@ -100,9 +97,9 @@ defmodule RagOllamaElixirWeb.RagLive do
   end
 
   def handle_event("ask_question", %{"question" => question}, socket) do
-    # Check if we have documents stored in the VectorDB
+    # Check if we have documents stored in the VectorStore
     has_documents = socket.assigns.vector_db != [] or
-                   (VectorDB.stats() |> Map.get(:document_count, 0)) > 0
+                   (VectorStore.stats() |> Map.get(:chunk_count, 0)) > 0
 
     if question != "" and not socket.assigns.processing and has_documents do
       # Ensure a conversation exists
@@ -406,10 +403,10 @@ defmodule RagOllamaElixirWeb.RagLive do
     IO.puts("=== Starting PDF processing with strategy: #{chunking_strategy} ===")
 
     if conversation_id do
-      VectorDB.clear(conversation_id)
+      VectorStore.clear_conversation(conversation_id)
       IO.puts("=== Cleared existing vectors for conversation #{conversation_id} ===")
     else
-      VectorDB.clear()
+      VectorStore.clear_all()
       IO.puts("=== Cleared all existing vectors ===")
     end
 
@@ -451,7 +448,7 @@ defmodule RagOllamaElixirWeb.RagLive do
 
           IO.puts("=== Created #{length(chunks)} chunks ===")
 
-          # Generate embeddings and store in persistent VectorDB
+          # Generate embeddings and store in persistent VectorStore
           chunk_embeddings = Enum.with_index(chunks)
           |> Enum.map(fn {chunk, index} ->
             IO.puts("=== Processing chunk #{index + 1}/#{length(chunks)} ===")
@@ -460,7 +457,7 @@ defmodule RagOllamaElixirWeb.RagLive do
             case Embedder.embed(client, chunk) do
               {:ok, embedding} when is_list(embedding) ->
                 IO.puts("=== Successfully embedded chunk #{index + 1}, embedding length: #{length(embedding)} ===")
-                %{text: chunk, embedding: embedding}
+                {chunk, embedding}
               {:ok, other_embedding} ->
                 IO.puts("=== Unexpected embedding format for chunk #{index + 1}: #{inspect(other_embedding)} ===")
                 nil
@@ -474,12 +471,14 @@ defmodule RagOllamaElixirWeb.RagLive do
           IO.puts("=== Generated #{length(chunk_embeddings)} embeddings ===")
 
           # Store in persistent vector database
-          Enum.each(chunk_embeddings, fn %{text: text, embedding: embedding} ->
-            IO.puts("=== Storing chunk with embedding type: #{inspect(embedding |> Enum.take(3))} (showing first 3 values) ===")
-            VectorDB.store(text, embedding, conversation_id)
-          end)
-
-          {:ok, length(chunk_embeddings)}
+          case VectorStore.store_chunks(chunk_embeddings, conversation_id) do
+            {:ok, count} ->
+              IO.puts("=== Successfully stored #{count} chunks in VectorStore ===")
+              {:ok, count}
+            {:error, reason} ->
+              IO.puts("=== Failed to store chunks: #{reason} ===")
+              {:error, reason}
+          end
 
         {:error, reason} ->
           IO.puts("=== PDF parsing failed: #{reason} ===")
@@ -501,7 +500,7 @@ defmodule RagOllamaElixirWeb.RagLive do
       case Embedder.embed(client, question) do
         {:ok, query_embedding} ->
           # Search the persistent vector database using hybrid retrieval
-          case VectorDB.hybrid_search(question, query_embedding, 5, conversation_id) do
+          case VectorStore.hybrid_search(question, query_embedding, 5, conversation_id) do
             {:ok, search_results} ->
               IO.puts("=== Found #{length(search_results)} relevant chunks using hybrid retrieval ===")
 

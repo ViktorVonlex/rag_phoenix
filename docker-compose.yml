@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:15-alpine
+    image: ankane/pgvector:latest
     environment:
       POSTGRES_DB: rag_ollama_elixir_dev
       POSTGRES_USER: postgres
@@ -17,25 +17,5 @@ services:
       timeout: 5s
       retries: 5
 
-  # Optional: PostgreSQL with vector extension for future use
-  postgres_vector:
-    image: ankane/pgvector:latest
-    environment:
-      POSTGRES_DB: rag_ollama_elixir_dev_vector
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5433:5432"
-    volumes:
-      - postgres_vector_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    profiles:
-      - vector
-
 volumes:
   postgres_data:
-  postgres_vector_data:
