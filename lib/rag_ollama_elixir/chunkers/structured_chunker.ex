@@ -172,17 +172,70 @@ defmodule RagOllamaElixir.Chunkers.StructuredChunker do
   end
 
   defp extract_course_grade_lines(text) do
-    text
+    # Apply whitespace normalization for better parsing
+    normalized_lines = text
     |> String.split("\n")
+    |> Enum.map(&String.replace(&1, ~r/\s+/, " "))
     |> Enum.map(&String.trim/1)
+    |> Enum.filter(&(&1 != ""))
+
+    # Group course-related lines together
+    course_lines = normalized_lines
     |> Enum.filter(fn line ->
-      # Look for lines that contain both course info and grades
-      has_course = String.match?(line, ~r/\*[A-Za-z\s:&]+/) or
-                   String.match?(line, ~r/[A-Z][A-Za-z\s:&]+(?:Program|Learning|Vision|Processing|Science|Studies|Analysis)/)
-      has_grade = String.match?(line, ~r/\b[A-F][+\-]?\b/)
-      has_course and has_grade
+      # Look for lines that contain course patterns (more flexible now with normalized spacing)
+      has_course_marker = String.match?(line, ~r/^\*/) or
+                         String.contains?(line, "Course Title") or
+                         String.match?(line, ~r/[A-Z][A-Za-z\s:&]+(Program|Learning|Vision|Processing|Science|Studies|Analysis|Korean|Machine|Deep|Introduction)/)
+      has_grade_pattern = String.match?(line, ~r/\b[A-F][+\-]?\b/) or
+                         String.match?(line, ~r/\b\d+\s+[A-F][+\-]?\b/)
+
+      has_course_marker or has_grade_pattern
     end)
-    |> Enum.take(10)  # Limit to reasonable number of courses
+
+    # Try to detect and group course table sections
+    if has_course_table_pattern?(normalized_lines) do
+      extract_course_table_section(normalized_lines)
+    else
+      course_lines |> Enum.take(10)  # Limit to reasonable number
+    end
+  end
+
+  # Detect if we have a course table pattern
+  defp has_course_table_pattern?(lines) do
+    Enum.any?(lines, fn line ->
+      String.contains?(line, "Course Title") and String.contains?(line, "Credits") and String.contains?(line, "Grade")
+    end)
+  end
+
+  # Extract course table as a single coherent chunk
+  defp extract_course_table_section(lines) do
+    # Find the table header
+    header_index = Enum.find_index(lines, fn line ->
+      String.contains?(line, "Course Title") and String.contains?(line, "Credits")
+    end)
+
+    if header_index do
+      # Get table header and subsequent course lines
+      table_lines = lines
+      |> Enum.drop(header_index)
+      |> Enum.take_while(fn line ->
+        # Continue until we hit a clearly non-course line
+        not String.match?(line, ~r/^(Remarks|Total Credits|The asterisk|This PDF|Page \d+)/i)
+      end)
+      |> Enum.filter(fn line ->
+        # Keep header, semester markers, course lines, and summary lines
+        String.contains?(line, "Course Title") or
+        String.contains?(line, "Semester") or
+        String.match?(line, ~r/^\*/) or
+        String.match?(line, ~r/(TERM|Credits|GP|GPA)/) or
+        (String.contains?(line, " A") or String.contains?(line, " B") or String.contains?(line, " C"))
+      end)
+
+      table_lines
+    else
+      # Fallback to individual course lines
+      lines |> Enum.filter(&String.match?(&1, ~r/^\*/)) |> Enum.take(10)
+    end
   end
 
   defp extract_general_course_info(text) do

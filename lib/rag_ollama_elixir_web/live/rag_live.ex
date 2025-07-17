@@ -503,6 +503,14 @@ defmodule RagOllamaElixirWeb.RagLive do
           case VectorStore.hybrid_search(question, query_embedding, 5, conversation_id) do
             {:ok, search_results} ->
               IO.puts("=== Found #{length(search_results)} relevant chunks using hybrid retrieval ===")
+              
+              # DEBUG: Print what chunks are actually being retrieved
+              Enum.with_index(search_results, 1)
+              |> Enum.each(fn {{content, similarity}, index} ->
+                IO.puts("=== CHUNK #{index} (similarity: #{Float.round(similarity, 3)}) ===")
+                IO.puts("Content: #{String.slice(content, 0, 200)}...")
+                IO.puts("=== END CHUNK #{index} ===")
+              end)
 
               # Start streaming chat
               case Chat.ask_stream(client, search_results, question, self()) do

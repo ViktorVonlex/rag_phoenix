@@ -10,8 +10,8 @@ defmodule RagOllamaElixir.Chunkers.SemanticChunker do
 
   @behaviour RagOllamaElixir.Chunkers.ChunkerBehaviour
 
-  @default_threshold 0.7
-  @default_min_chunk_size 200
+  @default_threshold 0.65  # Lowered from 0.7 to be more permissive
+  @default_min_chunk_size 250
 
   # Public entry point
   @impl true
@@ -45,8 +45,16 @@ defmodule RagOllamaElixir.Chunkers.SemanticChunker do
       min_chunk_size = Keyword.get(opts, :min_chunk_size, @default_min_chunk_size)
 
       # 1. Split to sentences (handles . ! ? and also \n)
+      # Apply whitespace normalization to help with tabular data
+      normalized_text = text
+      |> String.split("\n")
+      |> Enum.map(&String.replace(&1, ~r/\s+/, " "))  # Normalize whitespace
+      |> Enum.map(&String.trim/1)
+      |> Enum.filter(&(&1 != ""))
+      |> Enum.join("\n")
+
       sentences =
-        text
+        normalized_text
         |> String.split(~r/(?<=[.?!])\s+|\n+/)
         |> Enum.map(&String.trim/1)
         |> Enum.filter(&(&1 != ""))

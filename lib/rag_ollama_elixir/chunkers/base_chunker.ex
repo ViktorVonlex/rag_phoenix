@@ -17,6 +17,7 @@ defmodule RagOllamaElixir.Chunkers.BaseChunker do
     chunks = text
     |> String.split(~r/\n{2,}/)
     |> Enum.flat_map(&split_section/1)
+    |> Enum.map(&String.replace(&1, ~r/\s+/, " "))  # Normalize whitespace
     |> Enum.map(&String.trim/1)
     |> Enum.filter(&(&1 != ""))
     |> merge_small_chunks(target_size)
